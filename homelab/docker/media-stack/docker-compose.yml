@@ -1,0 +1,150 @@
+# Stack Média Homelab — Docker Compose
+# Media Stack Homelab
+#
+# Services: Jellyfin + Radarr + Sonarr + Prowlarr + qBittorrent
+# Hôte: Ubuntu Server VM (vmbr1 — réseau lab interne)
+# Accès distant: via Tailscale VPN
+#
+# IMPORTANT: Créer le fichier .env avant de lancer (voir .env.example)
+# IMPORTANT: Ne jamais committer le fichier .env dans git
+
+version: "3.8"
+
+# ─────────────────────────────────────────
+# Réseau interne Docker / Internal Docker network
+# ─────────────────────────────────────────
+networks:
+  media_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+# ─────────────────────────────────────────
+# Volumes persistants / Persistent volumes
+# ─────────────────────────────────────────
+volumes:
+  jellyfin_config:
+  jellyfin_cache:
+  radarr_config:
+  sonarr_config:
+  prowlarr_config:
+  qbittorrent_config:
+
+services:
+
+  # ─────────────────────────────────────────
+  # Jellyfin — Serveur de streaming
+  # Media streaming server
+  # ─────────────────────────────────────────
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    networks:
+      - media_net
+    ports:
+      - "8096:8096"      # Interface web HTTP
+      - "8920:8920"      # Interface web HTTPS (optionnel)
+    volumes:
+      - jellyfin_config:/config
+      - jellyfin_cache:/cache
+      - ${MEDIA_PATH}/films:/media/films:ro     # Films (read-only depuis Jellyfin)
+      - ${MEDIA_PATH}/series:/media/series:ro   # Séries TV
+    environment:
+      - JELLYFIN_PublishedServerUrl=http://${SERVER_IP}:8096
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # Radarr — Gestion des films
+  # Movie library management
+  # ─────────────────────────────────────────
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    networks:
+      - media_net
+    ports:
+      - "7878:7878"
+    volumes:
+      - radarr_config:/config
+      - ${MEDIA_PATH}/films:/movies          # Bibliothèque films
+      - ${DOWNLOAD_PATH}:/downloads          # Dossier téléchargements
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+    depends_on:
+      - qbittorrent
+      - prowlarr
+
+  # ─────────────────────────────────────────
+  # Sonarr — Gestion des séries TV
+  # TV series management
+  # ─────────────────────────────────────────
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    networks:
+      - media_net
+    ports:
+      - "8989:8989"
+    volumes:
+      - sonarr_config:/config
+      - ${MEDIA_PATH}/series:/tv             # Bibliothèque séries
+      - ${DOWNLOAD_PATH}:/downloads
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+    depends_on:
+      - qbittorrent
+      - prowlarr
+
+  # ─────────────────────────────────────────
+  # Prowlarr — Gestionnaire d'indexeurs
+  # Indexer manager (feeds Radarr + Sonarr)
+  # ─────────────────────────────────────────
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    restart: unless-stopped
+    networks:
+      - media_net
+    ports:
+      - "9696:9696"
+    volumes:
+      - prowlarr_config:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+
+  # ─────────────────────────────────────────
+  # qBittorrent — Client de téléchargement
+  # Download client
+  # ─────────────────────────────────────────
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    networks:
+      - media_net
+    ports:
+      - "8080:8080"      # Interface web qBittorrent
+      - "6881:6881"      # Port torrent TCP
+      - "6881:6881/udp"  # Port torrent UDP
+    volumes:
+      - qbittorrent_config:/config
+      - ${DOWNLOAD_PATH}:/downloads
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+      - WEBUI_PORT=8080
